@@ -1,0 +1,391 @@
+/* ============================================
+   pibiCo Brand Guidelines — CSS
+   "...engine to innovate"
+   ============================================ */
+
+/* --- Custom Properties --- */
+:root {
+  /* Primary */
+  --pibico-steel-blue: #4682B4;
+  --pibico-red-brick: #B33A2B;
+  --pibico-light-grey: #E8E8EA;
+
+  /* Steel Blue scale */
+  --pibico-steel-dark: #365F8A;
+  --pibico-steel-light: #6AABE0;
+  --pibico-steel-pale: #D6E8F5;
+
+  /* Red Brick scale */
+  --pibico-brick-dark: #8A2A1F;
+  --pibico-brick-light: #D4604F;
+  --pibico-brick-pale: #F5D6D2;
+
+  /* Neutrals */
+  --pibico-grey-mid: #C8C8CC;
+  --pibico-grey-dark: #6E6E76;
+  --pibico-white: #FFFFFF;
+  --pibico-near-black: #1A1A2E;
+
+  /* Gradients */
+  --pibico-grad-primary: linear-gradient(135deg, #4682B4 0%, #365F8A 100%);
+  --pibico-grad-accent: linear-gradient(135deg, #B33A2B 0%, #D4604F 100%);
+  --pibico-grad-surface: linear-gradient(180deg, #FFFFFF 0%, #E8E8EA 100%);
+  --pibico-grad-banner: linear-gradient(135deg, #4682B4 0%, #B33A2B 100%);
+
+  /* Typography */
+  --pibico-font-heading: 'Figtree', 'Poppins', Arial, sans-serif;
+  --pibico-font-body: 'Raleway', 'Poppins', Arial, sans-serif;
+  --pibico-font-button: 'Poppins', Arial, sans-serif;
+
+  /* Spacing & Radius */
+  --pibico-radius: 12px;
+  --pibico-radius-sm: 8px;
+  --pibico-radius-xs: 6px;
+
+  /* Shadows */
+  --pibico-card-shadow: 0 0 12px rgba(70, 130, 180, 0.15), 0 0 4px rgba(70, 130, 180, 0.08);
+  --pibico-card-shadow-hover: 0 0 20px rgba(70, 130, 180, 0.25), 0 0 8px rgba(70, 130, 180, 0.12);
+  --pibico-panel-shadow: -4px 0 24px rgba(26, 26, 46, 0.15);
+}
+
+/* --- Base Reset --- */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--pibico-font-body);
+  font-size: 0.9rem;
+  font-weight: 400;
+  line-height: 1.1;
+  color: var(--pibico-near-black);
+  background: var(--pibico-light-grey);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --- Typography --- */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--pibico-font-heading);
+  color: var(--pibico-near-black);
+  line-height: 1.1;
+}
+
+h1 { font-size: 1.8rem; font-weight: 700; }
+h2 { font-size: 1.4rem; font-weight: 600; }
+h3 { font-size: 1.15rem; font-weight: 600; }
+h4 { font-size: 1rem; font-weight: 500; }
+
+p, li, td, th, label, span {
+  line-height: 1.1;
+}
+
+small, .text-caption {
+  font-size: 0.8rem;
+  font-weight: 300;
+}
+
+.text-muted {
+  color: var(--pibico-grey-dark);
+}
+
+a {
+  color: var(--pibico-steel-blue);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+a:hover {
+  color: var(--pibico-steel-dark);
+}
+
+/* --- Cards --- */
+.pibico-card {
+  background: var(--pibico-white);
+  border: none;
+  border-radius: var(--pibico-radius);
+  padding: 3px 12px;
+  line-height: 1.1;
+  box-shadow: var(--pibico-card-shadow);
+  transition: box-shadow 0.2s ease;
+}
+
+.pibico-card:hover {
+  box-shadow: var(--pibico-card-shadow-hover);
+}
+
+.pibico-card * {
+  line-height: inherit;
+}
+
+/* --- Slide Panel --- */
+.pibico-panel-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(26, 26, 46, 0.4);
+  z-index: 999;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.pibico-panel-backdrop.active {
+  opacity: 1;
+  visibility: visible;
+}
+
+.pibico-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 45%;
+  height: 100vh;
+  background: var(--pibico-white);
+  z-index: 1000;
+  transform: translateX(100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow-y: auto;
+  box-shadow: var(--pibico-panel-shadow);
+  display: flex;
+  flex-direction: column;
+}
+
+.pibico-panel.active {
+  transform: translateX(0);
+}
+
+.pibico-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--pibico-grad-primary);
+  color: var(--pibico-white);
+  font-family: var(--pibico-font-heading);
+  font-weight: 600;
+  font-size: 1rem;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  line-height: 1.1;
+}
+
+.pibico-panel-close {
+  background: none;
+  border: none;
+  color: var(--pibico-white);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--pibico-radius-xs);
+  transition: background 0.2s ease;
+}
+
+.pibico-panel-close:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.pibico-panel-body {
+  padding: 16px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* --- Buttons --- */
+.pibico-btn {
+  font-family: var(--pibico-font-button);
+  font-weight: 500;
+  font-size: 0.85rem;
+  padding: 6px 16px;
+  border: none;
+  border-radius: var(--pibico-radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  line-height: 1.1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pibico-btn-primary {
+  background: var(--pibico-steel-blue);
+  color: var(--pibico-white);
+}
+.pibico-btn-primary:hover {
+  background: var(--pibico-steel-dark);
+}
+
+.pibico-btn-danger {
+  background: var(--pibico-red-brick);
+  color: var(--pibico-white);
+}
+.pibico-btn-danger:hover {
+  background: var(--pibico-brick-dark);
+}
+
+.pibico-btn-outline {
+  background: transparent;
+  color: var(--pibico-steel-blue);
+  box-shadow: inset 0 0 0 1.5px var(--pibico-steel-blue);
+}
+.pibico-btn-outline:hover {
+  background: var(--pibico-steel-pale);
+}
+
+.pibico-btn-ghost {
+  background: transparent;
+  color: var(--pibico-grey-dark);
+}
+.pibico-btn-ghost:hover {
+  background: var(--pibico-light-grey);
+  color: var(--pibico-near-black);
+}
+
+.pibico-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- Tables --- */
+.pibico-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--pibico-font-body);
+  font-size: 0.85rem;
+  line-height: 1.1;
+}
+
+.pibico-table th {
+  background: var(--pibico-grad-primary);
+  color: var(--pibico-white);
+  font-family: var(--pibico-font-heading);
+  font-weight: 600;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.pibico-table th:first-child {
+  border-radius: var(--pibico-radius) 0 0 0;
+}
+
+.pibico-table th:last-child {
+  border-radius: 0 var(--pibico-radius) 0 0;
+}
+
+.pibico-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--pibico-light-grey);
+}
+
+.pibico-table tr:last-child td {
+  border-bottom: none;
+}
+
+.pibico-table tr:hover td {
+  background: var(--pibico-steel-pale);
+}
+
+/* --- Form Inputs --- */
+.pibico-input,
+.pibico-select,
+.pibico-textarea {
+  font-family: var(--pibico-font-body);
+  font-size: 0.9rem;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--pibico-radius-sm);
+  background: var(--pibico-light-grey);
+  color: var(--pibico-near-black);
+  line-height: 1.1;
+  outline: none;
+  transition: box-shadow 0.2s ease, background 0.2s ease;
+  width: 100%;
+}
+
+.pibico-input:focus,
+.pibico-select:focus,
+.pibico-textarea:focus {
+  box-shadow: 0 0 0 2px var(--pibico-steel-blue);
+  background: var(--pibico-white);
+}
+
+.pibico-label {
+  font-family: var(--pibico-font-heading);
+  font-weight: 500;
+  font-size: 0.85rem;
+  color: var(--pibico-grey-dark);
+  margin-bottom: 2px;
+  display: block;
+}
+
+/* --- Badges & Tags --- */
+.pibico-badge {
+  display: inline-block;
+  font-family: var(--pibico-font-button);
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  line-height: 1.2;
+}
+
+.pibico-badge-blue {
+  background: var(--pibico-steel-pale);
+  color: var(--pibico-steel-dark);
+}
+
+.pibico-badge-red {
+  background: var(--pibico-brick-pale);
+  color: var(--pibico-brick-dark);
+}
+
+.pibico-badge-grey {
+  background: var(--pibico-light-grey);
+  color: var(--pibico-grey-dark);
+}
+
+/* --- Utility Classes --- */
+.pibico-flex { display: flex; }
+.pibico-flex-col { flex-direction: column; }
+.pibico-items-center { align-items: center; }
+.pibico-justify-between { justify-content: space-between; }
+.pibico-gap-sm { gap: 6px; }
+.pibico-gap-md { gap: 12px; }
+.pibico-gap-lg { gap: 20px; }
+.pibico-grid { display: grid; }
+.pibico-grid-2 { grid-template-columns: repeat(2, 1fr); }
+.pibico-grid-3 { grid-template-columns: repeat(3, 1fr); }
+
+/* --- Scrollbar --- */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--pibico-light-grey);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--pibico-grey-mid);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--pibico-grey-dark);
+}
+
+/* --- Responsive --- */
+@media (max-width: 768px) {
+  .pibico-panel {
+    width: 100%;
+  }
+
+  .pibico-grid-2,
+  .pibico-grid-3 {
+    grid-template-columns: 1fr;
+  }
+
+  h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.2rem; }
+}
