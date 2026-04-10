@@ -24,11 +24,11 @@ async def web_interface():
     <title>Embedding & Search - pibiCo AI Services</title>
 
     <!-- Favicon -->
-    <link rel="icon" type="image/svg+xml" href="/static/pibico_icon.svg">
+    <link rel="icon" type="image/svg+xml" href="/embed/static/pibico_icon.svg">
 
     <!-- Styles -->
-    <link rel="stylesheet" href="/static/css/bootstrap-icons.min.css">
-    <link rel="stylesheet" href="/static/css/pibico.css">
+    <link rel="stylesheet" href="/embed/static/css/bootstrap-icons.min.css">
+    <link rel="stylesheet" href="/embed/static/css/pibico.css">
 
     <style>
         * {

@@ -12,6 +12,7 @@ from typing import Optional, List, Dict, Tuple
 from collections import defaultdict
 from datetime import datetime
 import duckdb
+import shutil
 
 # GPU OPTIMIZATION: Enable GPU with memory controls
 # Using GPU with batch size limits to prevent OOM
@@ -47,17 +48,20 @@ performance_metrics = {
     'start_time': datetime.now()
 }
 
+# Proxy prefix — NGINX forwards /embed/* as-is to this app
+PROXY_PREFIX = os.getenv('ROOT_PATH', '')
+
 app = FastAPI(
     title="pibiRAG Unified Embedding API (Multi-Tenant)",
     description="Unified API for document embedding and semantic search using LEANN with multi-tenant support",
-    version="2.0.0",
-    docs_url="/embed/api/v1/docs",
-    redoc_url="/embed/api/v1/redoc",
-    openapi_url="/embed/api/v1/openapi.json"
+    version="2.1.0",
+    openapi_url=f"{PROXY_PREFIX}/api/v1/openapi.json",
+    docs_url=None,  # Custom docs endpoint below
+    redoc_url=f"{PROXY_PREFIX}/api/v1/redoc",
 )
 
-# Create router with /embed/api/v1 prefix to match nginx configuration
-router = APIRouter(prefix="/embed/api/v1")
+# Create router with prefix (NGINX passes /embed/api/v1/* as-is)
+router = APIRouter(prefix=f"{PROXY_PREFIX}/api/v1")
 
 # Base directory for LEANN indexes
 INDEX_BASE_DIR = Path("/home/pi/.services/api_embed/data/indexes")
@@ -84,11 +88,27 @@ class SearchRequest(BaseModel):
     library_id: str
     query: str
     k: int = 10
+    full_text: bool = False  # Return full document text instead of 200-char snippet
 
 class DeleteRequest(BaseModel):
     site: str
     library_id: str
     doc_name: str
+
+class ChunkItem(BaseModel):
+    doc_name: str       # "chunk_0", "chunk_1", ...
+    content: str
+    metadata: dict = {}
+
+class BatchIndexRequest(BaseModel):
+    site: str
+    library_id: str
+    chunks: List[ChunkItem]
+    replace: bool = True  # Delete existing library first
+
+class LibraryDeleteRequest(BaseModel):
+    site: str
+    library_id: str
 
 
 # Authentication
@@ -241,6 +261,43 @@ def rebuild_index_with_documents(index_path: Path, documents: List[Tuple[str, Di
         logger.error(f"Index rebuild failed after {elapsed:.2f}s: {e}", exc_info=True)
         performance_metrics['errors']['index_rebuild'] += 1
         raise
+
+# Custom Swagger UI endpoint with correct OpenAPI URL
+@app.get(f"{PROXY_PREFIX}/api/v1/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    """Custom Swagger UI that works with proxy prefix."""
+    from fastapi.responses import HTMLResponse
+    openapi_url = f"{PROXY_PREFIX}/api/v1/openapi.json"
+    static_prefix = f"{PROXY_PREFIX}/static"
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <link type="text/css" rel="stylesheet" href="{static_prefix}/css/swagger-ui.css">
+        <link rel="shortcut icon" href="{static_prefix}/icons/favicon.ico">
+        <title>pibiRAG Embedding API - Swagger UI</title>
+    </head>
+    <body>
+        <div id="swagger-ui"></div>
+        <script src="{static_prefix}/js/swagger-ui-bundle.js"></script>
+        <script>
+        const ui = SwaggerUIBundle({{
+            url: '{openapi_url}',
+            dom_id: '#swagger-ui',
+            layout: 'BaseLayout',
+            deepLinking: true,
+            showExtensions: true,
+            showCommonExtensions: true,
+            presets: [
+                SwaggerUIBundle.presets.apis,
+                SwaggerUIBundle.SwaggerUIStandalonePreset
+            ],
+        }})
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html)
 
 # Health check (no auth required)
 @router.get("/health")
@@ -451,10 +508,13 @@ async def search(req: SearchRequest, _: bool = Depends(verify_api_key)):
         for result in results:
             # Extract doc_name from metadata
             doc_name = result.metadata.get("doc_name", "unknown")
+            text_value = None
+            if hasattr(result, 'text'):
+                text_value = result.text if req.full_text else result.text[:200]
             formatted.append({
                 "doc_name": doc_name,
                 "similarity": float(result.score),
-                "text_snippet": result.text[:200] if hasattr(result, 'text') else None
+                "text_snippet": text_value
             })
 
         # Update metrics
@@ -525,7 +585,6 @@ async def delete_document(req: DeleteRequest, _: bool = Depends(verify_api_key))
         invalidate_cache_for_library(req.site, req.library_id)
 
         # Clear the entire library index directory
-        import shutil
         shutil.rmtree(index_dir)
         logger.info(f"Cleared index directory: {index_dir}")
         
@@ -541,6 +600,112 @@ async def delete_document(req: DeleteRequest, _: bool = Depends(verify_api_key))
     except Exception as e:
         logger.error(f"Failed to delete document {req.doc_name}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Delete failed: {str(e)}")
+
+@router.post("/index/batch")
+async def batch_index_documents(req: BatchIndexRequest, _: bool = Depends(verify_api_key)):
+    """
+    Batch index multiple chunks into a library at once.
+
+    If replace=True (default), wipes the existing library first.
+    All chunks are indexed in a single LEANN rebuild for efficiency.
+    """
+    start_time = time.time()
+    try:
+        logger.info(f"Batch indexing {len(req.chunks)} chunks into {req.site}:{req.library_id} (replace={req.replace})")
+
+        if not req.chunks:
+            raise HTTPException(status_code=400, detail="No chunks provided")
+
+        index_path = get_index_path(req.site, req.library_id)
+
+        # If replace mode, wipe existing library
+        if req.replace:
+            index_dir = index_path.parent
+            if index_dir.exists():
+                shutil.rmtree(index_dir)
+                logger.info(f"Cleared existing library directory: {index_dir}")
+
+        # Invalidate search cache for this library
+        invalidate_cache_for_library(req.site, req.library_id)
+
+        # Prepare all chunks as (text, metadata) tuples
+        documents = []
+        for chunk in req.chunks:
+            if not chunk.content or not chunk.content.strip():
+                continue
+            content = chunk.content[:MAX_CONTENT_CHARS] if len(chunk.content) > MAX_CONTENT_CHARS else chunk.content
+            text = f"[{chunk.doc_name}] {content}"
+            metadata = {"doc_name": chunk.doc_name, **chunk.metadata}
+            documents.append((text, metadata))
+
+        if not documents:
+            raise HTTPException(status_code=400, detail="All chunks were empty")
+
+        # Rebuild index with all documents at once
+        rebuild_index_with_documents(index_path, documents)
+
+        elapsed = time.time() - start_time
+        performance_metrics['index_count'] += 1
+        performance_metrics['total_index_time'] += elapsed
+
+        logger.info(f"Batch indexed {len(documents)} chunks into {req.site}:{req.library_id} ({elapsed:.2f}s)")
+        return {
+            "status": "success",
+            "site": req.site,
+            "library_id": req.library_id,
+            "chunks_indexed": len(documents),
+            "total_documents": len(documents),
+            "processing_time_ms": round(elapsed * 1000, 2)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        elapsed = time.time() - start_time
+        performance_metrics['errors']['batch_index'] += 1
+        logger.error(f"Batch indexing failed for {req.site}:{req.library_id} after {elapsed:.2f}s: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Batch indexing failed: {str(e)}")
+
+@router.delete("/library")
+async def delete_library(req: LibraryDeleteRequest, _: bool = Depends(verify_api_key)):
+    """
+    Delete an entire library (all documents and index).
+
+    Removes the library directory and invalidates search cache.
+    """
+    try:
+        logger.info(f"Deleting library {req.site}:{req.library_id}")
+
+        index_path = get_index_path(req.site, req.library_id)
+        index_dir = index_path.parent
+
+        if not index_dir.exists():
+            return {
+                "status": "success",
+                "message": "Library does not exist",
+                "site": req.site,
+                "library_id": req.library_id,
+                "deleted": False
+            }
+
+        # Invalidate search cache
+        invalidate_cache_for_library(req.site, req.library_id)
+
+        # Remove entire library directory
+        shutil.rmtree(index_dir)
+        logger.info(f"Deleted library directory: {index_dir}")
+
+        return {
+            "status": "success",
+            "message": "Library deleted",
+            "site": req.site,
+            "library_id": req.library_id,
+            "deleted": True
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to delete library {req.site}:{req.library_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Library delete failed: {str(e)}")
 
 @router.get("/libraries")
 async def list_libraries(_: bool = Depends(verify_api_key)):
@@ -605,9 +770,9 @@ async def list_libraries(_: bool = Depends(verify_api_key)):
 # Include API router in app
 app.include_router(router)
 
-# Include web interface at /embed prefix (to match nginx configuration)
+# Include web interface at proxy prefix
 from app.api.v1.endpoints.web import router as web_router
-app.include_router(web_router, prefix="/embed")
+app.include_router(web_router, prefix=PROXY_PREFIX, include_in_schema=False)
 
 # Serve static files
 from fastapi.responses import FileResponse
@@ -616,21 +781,9 @@ import mimetypes
 
 static_path = Path(__file__).parent.parent / "static"
 
-@app.get("/static/{file_path:path}")
+@app.get(f"{PROXY_PREFIX}/static/{{file_path:path}}", include_in_schema=False)
 async def serve_static(file_path: str):
     """Serve static files."""
-    full_path = static_path / file_path
-    if full_path.exists() and full_path.is_file():
-        mime_type, _ = mimetypes.guess_type(str(full_path))
-        if file_path.endswith('.woff') or file_path.endswith('.woff2'):
-            mime_type = 'font/woff2' if file_path.endswith('.woff2') else 'font/woff'
-        return FileResponse(full_path, media_type=mime_type)
-    from fastapi.responses import JSONResponse
-    return JSONResponse(content={"error": "File not found"}, status_code=404)
-
-@app.get("/embed/static/{file_path:path}")
-async def serve_static_embed(file_path: str):
-    """Serve static files with /embed prefix."""
     full_path = static_path / file_path
     if full_path.exists() and full_path.is_file():
         mime_type, _ = mimetypes.guess_type(str(full_path))
