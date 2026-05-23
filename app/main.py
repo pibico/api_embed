@@ -110,6 +110,27 @@ class LibraryDeleteRequest(BaseModel):
     site: str
     library_id: str
 
+class VectorsRequest(BaseModel):
+    texts: List[str]
+    model: Optional[str] = None  # default DEFAULT_VECTORS_MODEL
+
+
+# Generate-only embedding model (pgvector-native RAG path). Multilingual so
+# ES/EN queries match cross-language; 1024-dim. Independent of LEANN's bge model.
+DEFAULT_VECTORS_MODEL = "intfloat/multilingual-e5-large"
+# Lazily-loaded sentence-transformers models for /vectors, keyed by name.
+_vectors_models: Dict[str, object] = {}
+
+def get_vectors_model(name: str):
+    """Load (once) a sentence-transformers model for generate-only embeddings."""
+    m = _vectors_models.get(name)
+    if m is None:
+        from sentence_transformers import SentenceTransformer
+        logger.info(f"Loading vectors model {name} on {GPU_DEVICE}")
+        m = SentenceTransformer(name, device=GPU_DEVICE)
+        _vectors_models[name] = m
+    return m
+
 
 # Authentication
 def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
@@ -766,6 +787,53 @@ async def list_libraries(_: bool = Depends(verify_api_key)):
     except Exception as e:
         logger.error(f"List libraries failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/vectors")
+async def generate_vectors(req: VectorsRequest, _: bool = Depends(verify_api_key)):
+    """Generate-only embeddings (no storage) for the pgvector-native RAG path.
+
+    Encodes ``texts`` with a multilingual sentence-transformers model (default
+    ``intfloat/multilingual-e5-large``, 1024-dim) and returns L2-normalized
+    vectors for cosine similarity. The caller is responsible for any e5
+    ``query:`` / ``passage:`` prefixes (texts are encoded as-is). This is
+    independent of LEANN's bge index model used by /index and /search.
+    """
+    model_name = req.model or DEFAULT_VECTORS_MODEL
+    if not req.texts:
+        return {"vectors": [], "model": model_name, "dim": 0, "count": 0}
+
+    start = time.time()
+    try:
+        st = get_vectors_model(model_name)
+        batch = int(os.getenv("SENTENCE_TRANSFORMERS_BATCH_SIZE", "64"))
+        embs = st.encode(
+            req.texts,
+            batch_size=batch,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        )
+        vectors = embs.tolist()
+        if GPU_AVAILABLE:
+            torch.cuda.empty_cache()
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower() and GPU_AVAILABLE:
+            torch.cuda.empty_cache()
+        performance_metrics['errors']['vectors'] += 1
+        logger.error(f"/vectors generation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"embedding failed: {e}")
+    except Exception as e:
+        performance_metrics['errors']['vectors'] += 1
+        logger.error(f"/vectors generation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    dim = len(vectors[0]) if vectors else 0
+    logger.info(
+        f"/vectors: {len(req.texts)} texts -> {dim}d in {time.time()-start:.2f}s model={model_name}"
+    )
+    return {"vectors": vectors, "model": model_name, "dim": dim, "count": len(vectors)}
+
 
 # Include API router in app
 app.include_router(router)
