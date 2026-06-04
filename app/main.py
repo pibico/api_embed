@@ -134,24 +134,98 @@ def _get_e5_model():
 class VectorsRequest(BaseModel):
     texts: List[str]
     model: Optional[str] = None  # advisory; this endpoint always serves e5-large
+    # Task #6 (b) — opt-in: when set, the server prepends the e5 instruction
+    # prefix internally so the caller stops being responsible for getting it
+    # right. Legacy callers (no kind) still work — the server passes their
+    # texts through untouched.
+    kind: Optional[str] = None  # "query" | "passage" | None
+
+
+def _e5_model_version() -> str:
+    """Stable identifier for the loaded e5 weights. Prefers the HF commit SHA
+    when sentence-transformers exposes it (lets the caller invalidate caches on
+    a model swap); falls back to the model name."""
+    try:
+        m = _get_e5_model()
+        # SentenceTransformer wraps a transformers AutoModel as the 0th module.
+        auto = m._first_module().auto_model
+        rev = getattr(auto.config, "_commit_hash", None) or getattr(auto.config, "commit_hash", None)
+        if rev:
+            return f"{_E5_NAME}@{str(rev)[:12]}"
+    except Exception:
+        pass
+    return _E5_NAME
+
+
+def _e5_truncation_flags(texts: List[str]) -> List[bool]:
+    """One bool per text — True when the tokenizer's token count exceeds the
+    model's max sequence length. Lets the caller surface what got silently
+    dropped instead of discovering recall losses much later. Uses the live
+    tokenizer; no add_special_tokens=True needed because we compare with the
+    same +2 (CLS+SEP) overhead the model would add."""
+    try:
+        m = _get_e5_model()
+        tok = m.tokenizer
+        max_len = int(getattr(tok, "model_max_length", 512))
+        out: List[bool] = []
+        for t in texts:
+            ids = tok.encode(t or "", add_special_tokens=False, truncation=False)
+            out.append(len(ids) + 2 > max_len)
+        return out
+    except Exception:
+        return [False] * len(texts)
 
 
 @app.post(f"{PROXY_PREFIX}/api/v1/vectors", tags=["Embeddings"])
 async def generate_vectors(req: VectorsRequest, _: bool = Depends(verify_api_key)):
-    """Generate dense embeddings (no storage). Returns {vectors, model, dim}."""
+    """Generate dense embeddings (no storage). Returns
+    ``{vectors, model, model_version, dim, truncated}``.
+
+    ``kind`` (Task #6 b): "query" or "passage" → server prepends the e5
+    instruction prefix; unset → caller is responsible (legacy behaviour).
+    Guarded against double-prefix: if a text already starts with the
+    instruction, we skip the prepend so a mixed-deploy window can't corrupt
+    embeddings."""
     if not req.texts:
-        return {"vectors": [], "model": _E5_NAME, "dim": 1024}
+        return {
+            "vectors": [], "model": _E5_NAME,
+            "model_version": _e5_model_version(),
+            "dim": 1024, "truncated": [],
+        }
     import anyio
+
+    inputs = list(req.texts)
+    if req.kind in ("query", "passage"):
+        prefix = "query: " if req.kind == "query" else "passage: "
+        inputs = [
+            t if (t.startswith("query: ") or t.startswith("passage: ")) else prefix + t
+            for t in inputs
+        ]
+
+    truncated = _e5_truncation_flags(inputs)
+    if any(truncated):
+        n = sum(1 for x in truncated if x)
+        logger.info(
+            "vectors: %d/%d texts exceeded e5 max_seq_length and will be truncated",
+            n, len(truncated),
+        )
+
     model = _get_e5_model()
 
     def _encode():
         return model.encode(
-            req.texts, normalize_embeddings=True, batch_size=32, show_progress_bar=False
+            inputs, normalize_embeddings=True, batch_size=32, show_progress_bar=False
         )
 
     embs = await anyio.to_thread.run_sync(_encode)
     vectors = [[float(x) for x in row] for row in embs]
-    return {"vectors": vectors, "model": _E5_NAME, "dim": (len(vectors[0]) if vectors else 1024)}
+    return {
+        "vectors": vectors,
+        "model": _E5_NAME,
+        "model_version": _e5_model_version(),
+        "dim": (len(vectors[0]) if vectors else 1024),
+        "truncated": truncated,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
