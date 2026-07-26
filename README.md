@@ -108,6 +108,14 @@ Environment set by supervisor: `ROOT_PATH=/embed`,
 `HF_HOME=/home/erpnext/.cache/huggingface`, `TOKENIZERS_PARALLELISM=false`,
 plus the venv `PATH` and `PYTHONPATH`.
 
+This repo carries **two** supervisor configs, one per host — pick the one for
+your box, never edit one to match the other:
+
+| File | Host |
+|---|---|
+| `supervisor.conf` | the `/home/pi` layout |
+| `supervisor.erpnext.conf` | this box (`1BC1CD8`, user `erpnext`) |
+
 A single worker is deliberate: both models live in one process's GPU memory, and
 more workers would multiply the VRAM footprint for no throughput gain. Encoding
 runs in a worker thread (`anyio.to_thread`) so the event loop stays responsive.
