@@ -23,6 +23,7 @@ from pathlib import Path
 import logging
 import mimetypes
 import os
+import threading
 from datetime import datetime
 
 
@@ -120,6 +121,13 @@ async def custom_swagger_ui_html():
 # ─────────────────────────────────────────────────────────────────────────────
 _E5_MODEL = None
 _E5_NAME = "intfloat/multilingual-e5-large"
+# Un candado por modelo. El tokenizador rápido de HuggingFace no admite dos
+# usos a la vez: el segundo revienta con «RuntimeError: Already borrowed», que
+# sale como 500 y deja un lote entero sin vectores. Lo provocaban el recuento de
+# truncado (en el bucle de eventos) contra el encode (en un hilo) y dos encode
+# entre sí: el 08/10/2026 falló así el 26% de las llamadas a /vectors. Es una
+# sola GPU, así que serializar no cuesta rendimiento real.
+_E5_LOCK = threading.Lock()
 
 
 def _get_e5_model():
@@ -202,22 +210,24 @@ async def generate_vectors(req: VectorsRequest, _: bool = Depends(verify_api_key
             for t in inputs
         ]
 
-    truncated = _e5_truncation_flags(inputs)
+    def _encode():
+        # Recuento y encode bajo el mismo candado y en el mismo hilo: los dos
+        # usan el tokenizador, y el recuento ya no bloquea el bucle de eventos.
+        with _E5_LOCK:
+            model = _get_e5_model()
+            flags = _e5_truncation_flags(inputs)
+            out = model.encode(
+                inputs, normalize_embeddings=True, batch_size=32, show_progress_bar=False
+            )
+        return flags, out
+
+    truncated, embs = await anyio.to_thread.run_sync(_encode)
     if any(truncated):
         n = sum(1 for x in truncated if x)
         logger.info(
             "vectors: %d/%d texts exceeded e5 max_seq_length and will be truncated",
             n, len(truncated),
         )
-
-    model = _get_e5_model()
-
-    def _encode():
-        return model.encode(
-            inputs, normalize_embeddings=True, batch_size=32, show_progress_bar=False
-        )
-
-    embs = await anyio.to_thread.run_sync(_encode)
     vectors = [[float(x) for x in row] for row in embs]
     return {
         "vectors": vectors,
@@ -234,6 +244,7 @@ async def generate_vectors(req: VectorsRequest, _: bool = Depends(verify_api_key
 # ─────────────────────────────────────────────────────────────────────────────
 _RERANK_MODEL = None
 _RERANK_NAME = "BAAI/bge-reranker-v2-m3"
+_RERANK_LOCK = threading.Lock()  # mismo motivo que _E5_LOCK
 
 
 def _get_rerank_model():
@@ -258,11 +269,11 @@ async def rerank_passages(req: RerankRequest, _: bool = Depends(verify_api_key))
     if not req.passages:
         return {"scores": [], "model": _RERANK_NAME}
     import anyio
-    model = _get_rerank_model()
     pairs = [[req.query, (p or "")[:2000]] for p in req.passages]
 
     def _predict():
-        return model.predict(pairs, batch_size=16, show_progress_bar=False)
+        with _RERANK_LOCK:
+            return _get_rerank_model().predict(pairs, batch_size=16, show_progress_bar=False)
 
     scores = await anyio.to_thread.run_sync(_predict)
     return {"scores": [float(s) for s in scores], "model": _RERANK_NAME}
