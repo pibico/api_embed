@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from pathlib import Path
 import logging
+import logging.handlers
 import mimetypes
 import os
 import threading
@@ -35,7 +36,11 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('logs/api_embed.log'),
+        # supervisor solo rota su stdout; este fichero es de la app y sin
+        # tope crece para siempre.
+        logging.handlers.RotatingFileHandler(
+            'logs/api_embed.log', maxBytes=50 * 1024 * 1024, backupCount=5,
+        ),
         logging.StreamHandler(),
     ],
 )
