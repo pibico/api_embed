@@ -18,11 +18,14 @@ stays light.
 from fastapi import FastAPI, HTTPException, Depends, Header, APIRouter
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
+from dotenv import load_dotenv
 from typing import Optional, List
 from pathlib import Path
 import logging
+import logging.handlers
 import mimetypes
 import os
+import hmac
 from datetime import datetime
 
 
@@ -30,13 +33,25 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
 os.environ['SENTENCE_TRANSFORMERS_BATCH_SIZE'] = '64'
 
+# Configuracion desde el entorno. El fichero .env del directorio de la aplicacion
+# (600, fuera de git: .gitignore) se carga aqui y no pisa lo que ya venga en el
+# entorno del proceso. La clave NO tiene valor por defecto (ver API_TOKEN).
+APP_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(APP_DIR / ".env")
+
+# Registros: a la carpeta que diga EMBED_LOG_DIR (en produccion, en memoria), con
+# tope (50 MB x 3); sin EMBED_LOG_DIR, solo a la salida estandar (supervisor).
+_LOG_HANDLERS = [logging.StreamHandler()]
+_LOG_DIR = os.environ.get("EMBED_LOG_DIR", "").strip()
+if _LOG_DIR:
+    _LOG_HANDLERS.insert(0, logging.handlers.RotatingFileHandler(
+        os.path.join(_LOG_DIR, "api_embed.log"), maxBytes=50 * 1024 * 1024, backupCount=3,
+    ))
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('/home/pi/.services/api_embed/logs/api_embed.log'),
-        logging.StreamHandler(),
-    ],
+    handlers=_LOG_HANDLERS,
 )
 logger = logging.getLogger(__name__)
 
@@ -64,12 +79,19 @@ app = FastAPI(
 
 router = APIRouter(prefix=f"{PROXY_PREFIX}/api/v1")
 
-API_TOKEN = "mi-embedding"
+# Clave de la API: solo del entorno (EMBED_API_KEY, normalmente desde .env).
+# Sin valor por defecto: si falta o esta vacia, la aplicacion no arranca.
+API_TOKEN = os.environ.get("EMBED_API_KEY", "")
+if not API_TOKEN.strip():
+    raise RuntimeError(
+        "EMBED_API_KEY no esta definida (ni en el entorno ni en .env): "
+        "api_embed no arranca sin clave"
+    )
 START_TIME = datetime.now()
 
 
 def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
-    if x_api_key != API_TOKEN:
+    if not hmac.compare_digest(x_api_key.encode("utf-8"), API_TOKEN.encode("utf-8")):
         logger.warning("Invalid API key attempted")
         raise HTTPException(status_code=401, detail="Invalid API key")
     return True
@@ -150,6 +172,10 @@ def _e5_model_version() -> str:
         # SentenceTransformer wraps a transformers AutoModel as the 0th module.
         auto = m._first_module().auto_model
         rev = getattr(auto.config, "_commit_hash", None) or getattr(auto.config, "commit_hash", None)
+        if not rev:
+            # transformers 5 ya no guarda _commit_hash en la configuracion;
+            # sentence-transformers conserva la revision en model_card_data.
+            rev = getattr(getattr(m, "model_card_data", None), "base_model_revision", None)
         if rev:
             return f"{_E5_NAME}@{str(rev)[:12]}"
     except Exception:
@@ -321,12 +347,14 @@ app.include_router(web_router, prefix=PROXY_PREFIX, include_in_schema=False)
 
 # Serve static assets for the swagger UI overrides
 static_path = Path(__file__).parent.parent / "static"
+_STATIC_ROOT = static_path.resolve()
 
 
 @app.get(f"{PROXY_PREFIX}/static/{{file_path:path}}", include_in_schema=False)
 async def serve_static(file_path: str):
-    full_path = static_path / file_path
-    if full_path.exists() and full_path.is_file():
+    # Solo ficheros que esten dentro de static/ (ni «..» ni rutas absolutas).
+    full_path = (static_path / file_path).resolve()
+    if full_path.is_relative_to(_STATIC_ROOT) and full_path.is_file():
         mime_type, _ = mimetypes.guess_type(str(full_path))
         if file_path.endswith('.woff') or file_path.endswith('.woff2'):
             mime_type = 'font/woff2' if file_path.endswith('.woff2') else 'font/woff'
